@@ -6,7 +6,7 @@ from ultralytics import YOLO
 
 # ---- Paths & knobs ----
 MODEL_WEIGHTS = "yolov8s.pt"           # change to yolov8m.pt if you have headroom
-DATA_YAML     = "data.yaml"            # must list: 0: normal, 1: anomaly
+DATA_YAML     = "data_resolved.yaml"            # must list: 0: normal, 1: anomaly
 PROJECT       = "runs_thermoai"
 RUN_NAME      = "yolov8s_2cls"
 DEVICE        = 0                     # GPU id; use 'cpu' to force CPU

@@ -1,0 +1,5 @@
+train: /data/ThermoAI/dataset/images/train
+val: /data/ThermoAI/dataset/images/val
+names:
+  0: normal
+  1: anomaly
