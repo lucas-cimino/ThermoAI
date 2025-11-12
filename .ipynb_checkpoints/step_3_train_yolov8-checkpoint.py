@@ -18,18 +18,19 @@ if __name__ == "__main__":
     results = model.train(
         data=DATA_YAML,
         imgsz=640,
-        epochs=200,
+        epochs=40,
         batch=16,
         device=DEVICE,
         workers=4,
         project=PROJECT,
         name=RUN_NAME,
+        exist_ok=True,
         # Thermal-friendly augs (no color jitter)
         hsv_h=0.0, hsv_s=0.0, hsv_v=0.0,
         flipud=0.0, fliplr=0.5,
         degrees=10, translate=0.05, scale=0.2, shear=0.0,
         mosaic=0.7, mixup=0.1,
-        patience=50,                # early stop if no improvement
+        patience=15,                # early stop if no improvement
         save=True,
     )
 

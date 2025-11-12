@@ -1,0 +1,7 @@
+# data.yaml (ABSOLUTE paths; no 'path:' key)
+train: "C:/Users/Microsoft User/Desktop/ETS/Automne 2025 (Coree)/COMPUTER VISION/ThermoAI/dataset/images/train"
+val:   "C:/Users/Microsoft User/Desktop/ETS/Automne 2025 (Coree)/COMPUTER VISION/ThermoAI/dataset/images/val"
+
+names:
+  0: normal
+  1: anomaly
