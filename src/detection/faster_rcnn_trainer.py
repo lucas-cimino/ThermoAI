@@ -3,6 +3,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2, FasterRCNN_ResNet50_FPN_V2_Weights
 from torchvision.transforms import v2 as T
+import os
 # NOTE: The imports below assume these utility files are placed in the same directory (src/detection/)
 # from coco_utils import CocoDetection 
 # from engine import train_one_epoch, evaluate
@@ -14,11 +15,11 @@ BATCH_SIZE = 4
 NUM_EPOCHS = 25  
 LEARNING_RATE = 0.005
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-# --- Data Paths (Updated to reference the data/ folder) ---
-IMAGE_DIR = './images' # Assuming unzipping 'dataset.zip' creates an 'images/' folder in the root
-TRAIN_JSON = './data/data_split/train_split.json'
-VAL_JSON = './data/data_split/val_split.json'
-# --- Output Path (Updated to reference the models/ folder) ---
+# --- Data Paths (Updated based on 'dataset/train' folder) ---
+IMAGE_DIR = './dataset/train/images' # Path to the image folder
+TRAIN_JSON = './dataset/data_split/train_split.json'
+VAL_JSON = './dataset/data_split/val_split.json'
+# --- Output Path ---
 MODEL_OUTPUT_DIR = './models'
 # ---------------------
 
@@ -43,6 +44,7 @@ def get_model(num_classes):
 
     # 2. Modify the box predictor head for your specific number of classes
     in_features = model.roi_heads.box_predictor.cls_score.in_features
+    # We set num_classes to 2 (1 anomaly class + 1 background class)
     model.roi_heads.box_predictor = torch.nn.Linear(in_features, num_classes)
     
     return model
@@ -58,12 +60,11 @@ def main():
     
     # Placeholder for the training loop logic which requires utility files
     print("--- DEPENDENCY CHECK ---")
-    print("1. Ensure your data is split by running src/tools/data_splitter.py.")
+    print("1. Run src/tools/data_splitter.py to create split JSONs.")
     print("2. Place 'coco_utils.py', 'engine.py', and 'utils.py' inside 'src/detection/' to enable imports.")
     print(f"Ready to start training for {NUM_EPOCHS} epochs with BATCH_SIZE={BATCH_SIZE}")
 
-    # The actual training run would be here:
-    # ... Training loop code using DataLoaders and engine.py ...
+    # The actual training run would be here, using DataLoaders, Optimizer, and engine.py...
 
     # Placeholder save:
     save_path = os.path.join(MODEL_OUTPUT_DIR, f'faster_rcnn_final_epoch_{NUM_EPOCHS}.pth')

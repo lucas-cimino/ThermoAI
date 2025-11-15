@@ -3,10 +3,11 @@ import os
 import random
 
 # --- Configuration ---
-# INPUT_JSON_PATH is now located in the data/ directory
+# INPUT: Points to the specific location of the original JSON file
 INPUT_JSON_PATH = './dataset/train/train.json' 
-OUTPUT_DIR = './dataset/data_split' # Output directory is also in data/
-SPLIT_RATIO = 0.8 
+# OUTPUT: New split JSONs will be saved here
+OUTPUT_DIR = './dataset/data_split' 
+SPLIT_RATIO = 0.8  # 80% for training, 20% for validation
 RANDOM_SEED = 42   
 # ---------------------
 
@@ -19,7 +20,7 @@ def split_coco_dataset(input_path, output_dir, ratio, seed):
         with open(input_path, 'r') as f:
             data = json.load(f)
     except FileNotFoundError:
-        print(f"ERROR: Input file not found at {input_path}. Ensure it is in the 'dataset/' folder.")
+        print(f"ERROR: Input file not found at {input_path}. Please check the path and ensure the file exists.")
         return
 
     # Ensure output directory exists
@@ -66,5 +67,4 @@ def split_coco_dataset(input_path, output_dir, ratio, seed):
     print(f"Saved validation data to {os.path.join(output_dir, 'val_split.json')}")
 
 if __name__ == '__main__':
-    # We run this script from the project root directory
     split_coco_dataset(INPUT_JSON_PATH, OUTPUT_DIR, SPLIT_RATIO, RANDOM_SEED)
