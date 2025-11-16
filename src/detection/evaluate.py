@@ -17,10 +17,10 @@ from src.detection import coco_utils
 from src.detection import coco_eval
 from src.detection import engine
 
-# --- Configuration ---
+# --- Configuration (These are default values, but the function signature below uses the names from the trainer) ---
 NUM_CLASSES = 2 # Anomaly (1) + Background (1)
-DATA_DIR = 'data/thermal_anomalies'
-ANNOTATION_FILE = 'validation.json' 
+DATA_DIR_DEFAULT = 'data/thermal_anomalies'
+ANNOTATION_FILE_DEFAULT = 'validation.json' 
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 # --- Dataset Class ---
@@ -104,8 +104,8 @@ def get_model_instance_segmentation(num_classes):
 
 # --- Evaluation Function ---
 
-# NOTE: Changing 'data_dir' to 'dataset_dir' to match the keyword argument used in faster_rcnn_trainer.py
-def calculate_mAP(model_path, dataset_dir, ann_file, device):
+# NOTE: The signature now matches the trainer's call: 'dataset_dir' and 'annotation_file'
+def calculate_mAP(model_path, dataset_dir, annotation_file, device):
     """
     Loads a trained model, runs evaluation on the validation dataset, 
     and returns the COCO mAP statistics.
@@ -121,9 +121,9 @@ def calculate_mAP(model_path, dataset_dir, ann_file, device):
     
     # 3. Create the dataset and dataloader
     dataset_val = ThermalAnomalyDataset(
-        # Use dataset_dir instead of data_dir
         root=os.path.join(dataset_dir, 'images'), 
-        annFile=os.path.join(dataset_dir, 'annotations', ann_file), 
+        # Use the 'annotation_file' parameter here
+        annFile=os.path.join(dataset_dir, annotation_file), 
         transforms=lambda img, target: (F.to_tensor(img), target)
     )
     
@@ -142,11 +142,9 @@ def calculate_mAP(model_path, dataset_dir, ann_file, device):
 if __name__ == '__main__':
     # Example usage for standalone testing
     
-    # Create a dummy model directory if it doesn't exist
     if not os.path.exists('models'):
         os.makedirs('models')
         
-    # Define a path for a model to test loading
     dummy_model_path = './models/faster_rcnn_final_epoch_1.pth'
 
     if not os.path.exists(dummy_model_path):
@@ -158,8 +156,8 @@ if __name__ == '__main__':
     # Run the full evaluation process
     stats = calculate_mAP(
         model_path=dummy_model_path,
-        dataset_dir=DATA_DIR, # Using DATA_DIR defined at the top
-        ann_file=ANNOTATION_FILE,
+        dataset_dir=DATA_DIR_DEFAULT, # Using default directory
+        annotation_file=ANNOTATION_FILE_DEFAULT, # Using default file name
         device=DEVICE
     )
     
