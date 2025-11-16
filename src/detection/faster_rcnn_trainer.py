@@ -22,8 +22,8 @@ from src.detection.evaluate import calculate_mAP
 # Import model architecture
 from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-# Import pre-trained weights
-from torchvision.models.detection.weights import FasterRCNN_ResNet50_FPN_V2_Weights
+# --- FAILING IMPORT REMOVED ---
+# from torchvision.models.detection.weights import FasterRCNN_ResNet50_FPN_V2_Weights 
 
 # --- Configuration ---
 DATASET_DIR = 'dataset' 
@@ -59,8 +59,10 @@ def get_model_instance_segmentation(num_classes):
     """Loads a pre-trained Faster R-CNN model (V2) and modifies the prediction head."""
     print("Initializing Faster R-CNN (ResNet-50-FPN-V2) using COCO Transfer Learning...")
     
-    # Load the best available pre-trained weights
-    weights = FasterRCNN_ResNet50_FPN_V2_Weights.DEFAULT
+    # --- CRITICAL FIX HERE ---
+    # Load weights using the backward-compatible string "DEFAULT"
+    # instead of the new ...weights enum.
+    weights = "DEFAULT" 
     model = fasterrcnn_resnet50_fpn_v2(weights=weights)
     
     # Get the number of input features for the classifier
@@ -81,9 +83,7 @@ def main():
     # --- Data Loading ---
     print("Loading datasets...")
 
-    # --- CRITICAL PATH FIX HERE ---
     # The images are in 'dataset/train/images'
-    # This path is now correct based on your 'ls' command.
     img_root = os.path.join(DATASET_DIR, 'train', 'images') 
     ann_root = os.path.join(DATASET_DIR, 'data_split')
     
