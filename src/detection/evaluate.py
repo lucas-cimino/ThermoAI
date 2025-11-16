@@ -1,111 +1,170 @@
 import torch
-import torch.utils.data
-from torchvision.models.detection import fasterrcnn_resnet50_fpn
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-# Import the evaluation function (assuming you successfully merged the fix for coco_utils)
-from engine import evaluate as evaluate_model_func 
-from utils import collate_fn
-from pathlib import Path
 import json
+import os
+import sys
+from PIL import Image
+
+# Import necessary dependencies from torchvision
+from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2 # <-- CRUCIAL V2 IMPORT
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+from torchvision.transforms import functional as F
+
+# Add the directory containing the project modules to the path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+
+# Import local utility files
+from src.detection import coco_utils
+from src.detection import coco_eval
+from src.detection import engine
 
 # --- Configuration ---
 NUM_CLASSES = 2 # Anomaly (1) + Background (1)
-MODEL_PATH = 'models/faster_rcnn_final_epoch_25.pth'
 DATA_DIR = 'data/thermal_anomalies'
 ANNOTATION_FILE = 'validation.json' 
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-def get_model_instance_segmentation(num_classes):
-    """Loads a pre-trained Faster R-CNN model and modifies the prediction head."""
-    model = fasterrcnn_resnet50_fpn(weights="DEFAULT")
-    in_features = model.roi_heads.box_predictor.cls_score.in_features
-    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-    return model
+# --- Dataset Class ---
 
-# Placeholder for your specific dataset class (Must be consistent with train.py)
-class ThermalAnomalyDataset(torch.utils.data.Dataset):
-    def __init__(self, data_dir, annotation_file):
-        import pycocotools.coco as coco_api
-        self.coco_json_path = Path(data_dir) / annotation_file
-        
-        if not self.coco_json_path.exists():
-             raise FileNotFoundError(f"Annotation file not found at {self.coco_json_path}. Cannot initialize COCO evaluator.")
-             
-        self.coco = coco_api.COCO(self.coco_json_path)
-        self.img_ids = sorted(self.coco.imgs.keys())
+class ThermalAnomalyDataset(coco_utils.CocoDetection):
+    def __init__(self, root, annFile, transforms=None):
+        # We call the parent constructor from torchvision's CocoDetection
+        super().__init__(root, annFile, transforms)
+        self._transforms = transforms
 
     def __getitem__(self, idx):
-        img_id = self.img_ids[idx]
-        # Dummy tensors required by the DataLoader, though the evaluator primarily uses self.coco
-        image = torch.rand((3, 600, 800)) 
-        target = {'image_id': torch.as_tensor(img_id), 'boxes': torch.empty((0, 4)), 'labels': torch.empty((0,), dtype=torch.int64)}
-        return image, target
-
-    def __len__(self):
-        return len(self.img_ids)
-
-def calculate_mAP(model_path, dataset_dir, annotation_file, device):
-    """Calculates and returns COCO metrics and the custom composite score."""
-    
-    model = get_model_instance_segmentation(NUM_CLASSES)
-    
-    if not Path(model_path).exists():
-        print(f"Error: Model file not found at {model_path}. Cannot evaluate.")
-        return None
+        # Get the original image and target (annotation)
+        img_id = self.ids[idx]
+        target = self.coco.loadAnns(self.coco.getAnnIds(img_id))
+        path = self.coco.loadImgs(img_id)[0]['file_name']
         
-    model.load_state_dict(torch.load(model_path, map_location=device))
+        img = Image.open(os.path.join(self.root, path)).convert('RGB')
+        
+        # Convert COCO format annotations to the expected PyTorch Detection format
+        target = self._convert_to_pytorch_target(target, img.size)
+
+        if self.transforms is not None:
+            img, target = self.transforms(img, target)
+        
+        return img, target
+
+    def _convert_to_pytorch_target(self, coco_target, image_size):
+        w, h = image_size
+        
+        # Process annotations for one image
+        boxes = []
+        labels = []
+        iscrowd = []
+        area = []
+
+        for obj in coco_target:
+            # COCO boxes are [x, y, w, h] - convert to [x_min, y_min, x_max, y_max]
+            x_min = obj['bbox'][0]
+            y_min = obj['bbox'][1]
+            x_max = x_min + obj['bbox'][2]
+            y_max = y_min + obj['bbox'][3]
+            
+            boxes.append([x_min, y_min, x_max, y_max])
+            
+            # The category ID is 1 for 'anomaly' (since we use 2 classes: 0=background, 1=anomaly)
+            labels.append(1) 
+            
+            iscrowd.append(obj['iscrowd'])
+            area.append(obj['area'])
+
+        if not boxes:
+            # Handle the case where an image has no annotations (should be rare/impossible for validation)
+            boxes = torch.zeros((0, 4), dtype=torch.float32)
+        else:
+            boxes = torch.as_tensor(boxes, dtype=torch.float32)
+        
+        # Create the final target dictionary
+        target = {}
+        target["boxes"] = boxes
+        target["labels"] = torch.as_tensor(labels, dtype=torch.int64)
+        target["image_id"] = torch.tensor([self.get_img_id(coco_target[0]['image_id'])])
+        target["area"] = torch.as_tensor(area, dtype=torch.float32)
+        target["iscrowd"] = torch.as_tensor(iscrowd, dtype=torch.uint8)
+
+        return target
+
+# --- Model Initialization ---
+
+def get_model_instance_segmentation(num_classes):
+    """Loads a pre-trained Faster R-CNN model (V2) and modifies the prediction head."""
+    # Use the V2 model to match the trainer!
+    # Load V2 architecture without weights first, as we are loading custom weights later
+    model = fasterrcnn_resnet50_fpn_v2() 
+    
+    # Get the number of input features for the classifier
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+    
+    # Replace the pre-trained head with a new one that knows our number of classes
+    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+    
+    return model
+
+# --- Evaluation Function ---
+
+def calculate_mAP(model_path, data_dir, ann_file, device):
+    """
+    Loads a trained model, runs evaluation on the validation dataset, 
+    and returns the COCO mAP statistics.
+    """
+    print(f"Loading model from: {model_path}")
+    
+    # 1. Initialize the model structure (V2)
+    model = get_model_instance_segmentation(NUM_CLASSES)
     model.to(device)
-
-    try:
-        dataset_test = ThermalAnomalyDataset(dataset_dir, annotation_file)
-    except FileNotFoundError as e:
-        print(f"\nFATAL ERROR: {e}")
-        return None
-
-    data_loader_test = torch.utils.data.DataLoader(
-        dataset_test, batch_size=1, shuffle=False, num_workers=4, collate_fn=collate_fn
+    
+    # 2. Load the trained state dictionary
+    # The fix ensures this architecture matches the saved file, resolving the RuntimeError
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    
+    # 3. Create the dataset and dataloader
+    dataset_val = ThermalAnomalyDataset(
+        root=os.path.join(data_dir, 'images'), 
+        annFile=os.path.join(data_dir, 'annotations', ann_file), 
+        # No transforms needed for validation other thanToTensor
+        transforms=lambda img, target: (F.to_tensor(img), target)
     )
-
-    print(f"\nStarting evaluation on {len(dataset_test)} images...")
     
-    # Run the evaluation function, which returns the COCO Evaluator object
-    coco_evaluator = evaluate_model_func(model, data_loader_test, device=device)
+    # Use the custom collate_fn for object detection
+    data_loader_val = torch.utils.data.DataLoader(
+        dataset_val, batch_size=4, shuffle=False, num_workers=4,
+        collate_fn=coco_utils.collate_fn 
+    )
     
-    # --- Extracting COCO Metrics ---
-    coco_metrics = coco_evaluator.coco_eval['bbox'].stats
+    # 4. Run the evaluation using the engine's built-in function
+    print("Starting validation...")
+    coco_stats = engine.evaluate(model, data_loader_val, device=device)
     
-    # COCO Metrics Index:
-    # 0: AP @ IoU=0.50:0.95 (mAP)
-    # 1: AP @ IoU=0.50 
-    # 8: AR @ IoU=0.50:0.95 (Max Detections = 100) -> Used as Recall proxy
-    # We will use the AP at 0.50 as a Precision proxy for simplicity, as Precision/Recall are usually calculated 
-    # across confidence thresholds, but AP@0.50 is the standard single-value metric.
-    
-    mAP50_95 = coco_metrics[0]
-    mAP50 = coco_metrics[1] # Use this as the Precision proxy
-    Recall_Proxy = coco_metrics[8] # AR Max Detections=100 as Recall proxy
-
-    # --- Custom Score Calculation ---
-    # Score = (mAP50-95 * 0.8) + (Precision * 0.1) + (Recall * 0.1)
-    
-    # Note: We are using mAP@0.50 as the Precision Proxy
-    custom_score = (mAP50_95 * 0.8) + (mAP50 * 0.1) + (Recall_Proxy * 0.1)
-    
-    results = {
-        'mAP50_95': mAP50_95,
-        'mAP50': mAP50,
-        'Recall_Proxy': Recall_Proxy,
-        'Custom_Score': custom_score
-    }
-    
-    print("\n--- Final Evaluation Summary ---")
-    print(f"mAP@0.50:0.95 (80% Weight): {mAP50_95:.4f}")
-    print(f"mAP@0.50 (Precision Proxy 10% Weight): {mAP50:.4f}")
-    print(f"AR@100 (Recall Proxy 10% Weight): {Recall_Proxy:.4f}")
-    print(f"🔥 Custom Composite Score: {custom_score:.4f} 🔥")
-    print("--------------------------------")
-    
-    return results
+    return coco_stats
 
 if __name__ == '__main__':
-    calculate_mAP(MODEL_PATH, DATA_DIR, ANNOTATION_FILE, DEVICE)
+    # Example usage for standalone testing
+    
+    # Create a dummy model directory if it doesn't exist
+    if not os.path.exists('models'):
+        os.makedirs('models')
+        
+    # Create a dummy model file (if you want to test the full path, 
+    # you would need to run the trainer once to generate the file)
+    dummy_model_path = './models/faster_rcnn_final_epoch_1.pth'
+
+    if not os.path.exists(dummy_model_path):
+        print(f"Warning: Dummy model file '{dummy_model_path}' not found. Please run the trainer first.")
+        # We can't run the evaluation without a model, so we exit if not testing from trainer
+        sys.exit(0) 
+        
+    print("--- Standalone mAP Test ---")
+    
+    # Run the full evaluation process
+    stats = calculate_mAP(
+        model_path=dummy_model_path,
+        data_dir=DATA_DIR,
+        ann_file=ANNOTATION_FILE,
+        device=DEVICE
+    )
+    
+    print("\n--- COCO Evaluation Results ---")
+    print(stats)
