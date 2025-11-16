@@ -21,27 +21,17 @@ from src.detection import utils
 
 # --- Configuration ---
 NUM_CLASSES = 2 # Anomaly (1) + Background (1)
-DATA_DIR_DEFAULT = 'data/thermal_anomalies'
-ANNOTATION_FILE_DEFAULT = 'validation.json' 
+# DATA_DIR_DEFAULT is set to 'data/thermal_anomalies' but should probably be 'dataset'
+# for this project's structure. Let's rely on parameters for data path.
+ANNOTATION_FILE_DEFAULT = 'val_split.json' # Renamed for clarity, since it's the specific filename
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 # --- Dataset Class ---
-# We inherit directly from the custom CocoDetection class in coco_utils.py
-# and rely on its __getitem__ for image and target loading, as it performs
-# the correct COCO-to-PyTorch conversion for us.
-
 class ThermalAnomalyDataset(coco_utils.CocoDetection):
-    # NOTE: The __init__ of the base class (in coco_utils.py) expects 
-    # (img_folder, ann_file, transforms). We must match this.
     def __init__(self, root, annFile, transforms=None):
-        # The 'root' passed here is actually the path to the 'images' folder.
         super().__init__(img_folder=root, ann_file=annFile, transforms=transforms)
         self._transforms = transforms
 
-    # We do NOT define __getitem__ or _convert_to_pytorch_target here, 
-    # as the inherited methods from coco_utils.CocoDetection already
-    # handle the image loading and annotation conversion into the
-    # expected PyTorch target dictionary format.
     pass
 
 # --- Model Initialization ---
@@ -67,12 +57,22 @@ def calculate_mAP(model_path, dataset_dir, annotation_file, device):
     model.to(device)
     
     # 2. Load the trained state dictionary
+    # The FutureWarning is expected when loading PyTorch models saved without weights_only=True
     model.load_state_dict(torch.load(model_path, map_location=device))
     
     # 3. Create the dataset and dataloader
+    
+    # --- PATH CORRECTION APPLIED HERE ---
+    # The image root is 'dataset/train' and annotations are in 'dataset/data_split'
+    img_root_path = os.path.join(dataset_dir, 'train') # Assuming images are in 'dataset/train' based on common structure
+    ann_file_path = os.path.join(dataset_dir, 'data_split', annotation_file)
+    
+    print(f"Loading validation annotations from: {ann_file_path}")
+    print(f"Loading validation images from: {img_root_path}")
+    
     dataset_val = ThermalAnomalyDataset(
-        root=os.path.join(dataset_dir, 'images'), 
-        annFile=os.path.join(dataset_dir, 'annotations', annotation_file), 
+        root=img_root_path, 
+        annFile=ann_file_path, 
         # Apply the transforms that simply convert the PIL image to a tensor
         transforms=lambda img, target: (F.to_tensor(img), target)
     )
@@ -99,6 +99,7 @@ if __name__ == '__main__':
         os.makedirs('models')
         
     dummy_model_path = './models/faster_rcnn_final_epoch_1.pth'
+    DATA_DIR_DEFAULT = 'dataset' # Corrected default for standalone test
 
     if not os.path.exists(dummy_model_path):
         print(f"Warning: Dummy model file '{dummy_model_path}' not found. Please run the trainer first to generate it.")

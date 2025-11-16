@@ -1,135 +1,164 @@
 import torch
-import torch.optim as optim
-from torch.utils.data import DataLoader
-from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2, FasterRCNN_ResNet50_FPN_V2_Weights
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-from torchvision.transforms import v2 as T
+import torch.utils.data
 import os
-from pathlib import Path # <-- NEW IMPORT
+import sys
+import json
+import math
+from PIL import Image
+from torchvision.transforms import functional as F
+from torch.optim.lr_scheduler import StepLR
 
-# --- CORE IMPORTS ---
-from coco_utils import CocoDetection 
-from engine import train_one_epoch
-from utils import collate_fn 
+# Add the project root directory to the Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-# --- NEW EVALUATION IMPORT ---
-from evaluate import calculate_mAP # Function to run full mAP and custom score calc
-# ---------------------
+# Import local utility files
+from src.detection.coco_utils import CocoDetection
+from src.detection import engine
+from src.detection import utils
+from src.detection.evaluate import calculate_mAP
 
-# --- Configuration (Keep this the same) ---
-NUM_CLASSES = 2  # 1 (anomaly) + 1 (background)
-BATCH_SIZE = 4   
-NUM_EPOCHS = 25  
+# Import model architecture
+from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+
+# --- Configuration ---
+# NOTE: Based on the file structure, the DATASET_DIR is 'dataset' and the 
+# image sub-directory used for training/validation is 'dataset/train'.
+DATASET_DIR = 'dataset' 
+TRAIN_ANN_FILE = 'train_split.json'
+VAL_ANN_FILE = 'val_split.json'
+
+NUM_CLASSES = 2 # Anomaly (1) + Background (1)
+NUM_EPOCHS = 25
+BATCH_SIZE = 4
+NUM_WORKERS = 4
 LEARNING_RATE = 0.005
 MOMENTUM = 0.9
 WEIGHT_DECAY = 0.0005
-PRINT_FREQ = 50 # Log every 50 iterations
-DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+MODEL_SAVE_DIR = './models'
 
-# --- Data Paths (Keep this the same) ---
-IMAGE_DIR = './dataset/train/images' 
-TRAIN_JSON = './dataset/data_split/train_split.json'
-VAL_JSON = './dataset/data_split/val_split.json'
+# --- Dataset Class (used for training) ---
 
-# --- Output Path (Keep this the same) ---
-MODEL_OUTPUT_DIR = './models'
-# ---------------------
+class ThermalAnomalyDataset(CocoDetection):
+    # This transform function is crucial for training, as it converts the PIL image
+    # to a tensor and keeps the target as is (the base class handles COCO-to-PyTorch conversion)
+    def __init__(self, root, annFile, transforms=None):
+        super().__init__(img_folder=root, ann_file=annFile, transforms=transforms)
+        self._transforms = transforms
 
-def get_transform(train):
-    """Defines the data augmentations and conversion to tensor."""
-    transforms = [
-        T.PILToTensor(),
-        T.ToDtype(torch.float, scale=True),
-    ]
-    if train:
-        transforms.append(T.RandomHorizontalFlip(0.5))
-    
-    return T.Compose(transforms)
+    # We rely on the inherited __getitem__ from CocoDetection in coco_utils.py
+    # which performs the necessary image and target preparation.
+    pass
 
-def get_model(num_classes):
-    """Initializes the Faster R-CNN model using COCO pre-trained weights,
-       and correctly swaps the final prediction head for transfer learning.
-    """
+
+# --- Model Initialization ---
+
+def get_model_instance_segmentation(num_classes):
+    """Loads a pre-trained Faster R-CNN model (V2) and modifies the prediction head."""
     print("Initializing Faster R-CNN (ResNet-50-FPN-V2) using COCO Transfer Learning...")
+    # Load a model pre-trained on COCO
+    model = fasterrcnn_resnet50_fpn_v2(weights="DEFAULT")
     
-    weights = FasterRCNN_ResNet50_FPN_V2_Weights.COCO_V1
-    
-    # 1. Load the model with pre-trained weights for the backbone
-    model = fasterrcnn_resnet50_fpn_v2(weights=weights)
-
-    # 2. Get the number of input features for the classifier
+    # Get the number of input features for the classifier
     in_features = model.roi_heads.box_predictor.cls_score.in_features
     
-    # 3. REPLACE the pre-trained box predictor with a new one for our custom classes.
+    # Replace the pre-trained head with a new one for our number of classes
+    # (num_classes includes the background class, hence 2 for our case: background + anomaly)
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
     
     return model
 
+# --- Main Training Function ---
+
 def main():
-    # 0. Setup directories
-    os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
-    print(f"Using device: {DEVICE}")
-    
-    # 1. Load Datasets
+    # Set up device
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    print(f"Using device: {device}")
+
+    # --- Data Loading ---
     print("Loading datasets...")
-    dataset_train = CocoDetection(IMAGE_DIR, TRAIN_JSON, transforms=get_transform(True))
-    dataset_val = CocoDetection(IMAGE_DIR, VAL_JSON, transforms=get_transform(False)) # Not used directly in loop, but required by DataLoader setup
+
+    # Define paths
+    img_root = os.path.join(DATASET_DIR, 'train') 
+    ann_dir = os.path.join(DATASET_DIR, 'data_split')
     
-    # 2. Create DataLoaders
-    data_loader_train = DataLoader(
-        dataset_train, batch_size=BATCH_SIZE, shuffle=True, num_workers=4,
-        collate_fn=collate_fn
+    dataset_train = ThermalAnomalyDataset(
+        root=img_root, 
+        annFile=os.path.join(ann_dir, TRAIN_ANN_FILE),
+        # Training transformation: PIL to Tensor
+        transforms=lambda img, target: (F.to_tensor(img), target) 
     )
-    # The validation data loader is needed for the mAP calculation inside the loop
-    data_loader_val = DataLoader(
-        dataset_val, batch_size=BATCH_SIZE, shuffle=False, num_workers=4,
-        collate_fn=collate_fn
+    
+    # The validation dataset uses the same class, but is primarily used by the evaluate.py
+    # The trainer needs to know the files exist, but evaluate.py handles its own dataloader.
+    
+    # DataLoaders
+    # The collate_fn is crucial for combining targets in batches
+    data_loader_train = torch.utils.data.DataLoader(
+        dataset_train, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS,
+        collate_fn=utils.collate_fn
     )
+
     print("DataLoaders created.")
 
-    # 3. Initialize Model and Optimizer
-    model = get_model(NUM_CLASSES)
-    model.to(DEVICE)
-    
+    # --- Model Initialization ---
+    model = get_model_instance_segmentation(NUM_CLASSES)
+    model.to(device)
+
+    # --- Optimizer and LR Scheduler ---
+    # Separate parameters for different parts of the model (e.g., backbone vs. heads)
     params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.SGD(
+    optimizer = torch.optim.SGD(
         params, 
-        lr=LEARNING_RATE,
-        momentum=MOMENTUM,
+        lr=LEARNING_RATE, 
+        momentum=MOMENTUM, 
         weight_decay=WEIGHT_DECAY
     )
+
+    # Use StepLR for learning rate reduction
+    lr_scheduler = StepLR(optimizer, step_size=3, gamma=0.1)
+
+    # Create model directory if it doesn't exist
+    if not os.path.exists(MODEL_SAVE_DIR):
+        os.makedirs(MODEL_SAVE_DIR)
+
+    # --- Training Loop ---
+    print(f"Starting training for {NUM_EPOCHS} epochs on device: {device}")
     
-    # 4. Training Loop
-    print(f"Starting training for {NUM_EPOCHS} epochs on device: {DEVICE}")
-    for epoch in range(NUM_EPOCHS):
-        # --- 4a. Train one epoch ---
-        train_one_epoch(model, optimizer, data_loader_train, DEVICE, epoch, PRINT_FREQ)
+    for epoch in range(1, NUM_EPOCHS + 1):
+        # Training step
+        engine.train_one_epoch(model, optimizer, data_loader_train, device, epoch, print_freq=50)
         
-        # --- 4b. Save Model Weights after the epoch ---
-        current_save_path = os.path.join(MODEL_OUTPUT_DIR, f'faster_rcnn_final_epoch_{epoch+1}.pth')
-        torch.save(model.state_dict(), current_save_path)
-        print(f"Model saved for Epoch {epoch+1} to {current_save_path}")
+        # Update the learning rate scheduler
+        lr_scheduler.step()
+        
+        print("Training complete for epoch.")
+        
+        # Save the model
+        model_save_path = os.path.join(MODEL_SAVE_DIR, f"faster_rcnn_final_epoch_{epoch}.pth")
+        torch.save(model.state_dict(), model_save_path)
+        print(f"Model saved for Epoch {epoch} to {model_save_path}\n")
 
-        # --- 4c. Run Full mAP Validation and Custom Score Calculation ---
-        if Path(current_save_path).exists():
-            print(f"\n--- Running Full mAP Validation for Epoch {epoch+1} ---")
-            
-            # NOTE: We pass the directory that contains the 'data_split' folder 
-            # and the path to the val split file relative to that directory.
-            calculate_mAP(
-                model_path=current_save_path,
-                dataset_dir='./dataset', # Root folder for annotations
-                annotation_file='data_split/val_split.json', # Relative path to annotation file
-                device=DEVICE
-            )
-            print("--------------------------------------------------")
-    
-    # 5. Final message (the last epoch's model is already saved as final_epoch_25.pth)
-    print(f"\nTraining complete. Final model weights are available in {MODEL_OUTPUT_DIR}")
+        # --- Validation and mAP Calculation ---
+        print(f"--- Running Full mAP Validation for Epoch {epoch} ---")
 
+        # IMPORTANT: Pass the base directory and the specific validation annotation filename
+        # This will be used by evaluate.py to construct the full path: dataset/data_split/val_split.json
+        coco_stats = calculate_mAP(
+            model_path=model_save_path, 
+            dataset_dir=DATASET_DIR, 
+            annotation_file=VAL_ANN_FILE, # Pass 'val_split.json'
+            device=device
+        )
+        
+        print(f"\n--- Epoch {epoch} Validation Results ---")
+        # Print the relevant COCO metrics (e.g., Average Precision (AP) @ IoU=0.50:0.95)
+        # The engine.py returns a dictionary of metrics, print them nicely.
+        coco_stats.summarize()
+        # Optionally, print the main AP metric
+        print(f"COCO AP@0.50:0.95: {coco_stats.stats[0]:.4f}")
+        
+    print("\n\nTraining completed successfully!")
 
-if __name__ == '__main__':
-    if not os.path.exists(TRAIN_JSON) or not os.path.exists(VAL_JSON):
-        print("ERROR: Split JSON files not found. Please run src/tools/data_splitter.py first!")
-    else:
-        main()
+if __name__ == "__main__":
+    main()
