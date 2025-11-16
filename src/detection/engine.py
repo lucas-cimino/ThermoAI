@@ -1,5 +1,9 @@
 import torch
 import sys
+import math
+from coco_utils import get_coco_api_from_dataset
+from coco_eval import CocoEvaluator
+from utils import MetricLogger, SmoothedValue, reduce_dict, warmup_lr_scheduler
 
 # Helper class to track average loss during training
 class AverageMeter:
@@ -19,6 +23,9 @@ class AverageMeter:
 
 def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
     model.train()
+    metric_logger = MetricLogger(delimiter="  ")
+    metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    header = 'Epoch: [{}]'.format(epoch+1)
     
     # Mocking the iterator structure for logging
     class MockIterator:
@@ -27,9 +34,16 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
             self.current = 0
             self.epoch = epoch
             self.loss_hist = AverageMeter()
+            self.lr = optimizer.param_groups[0]["lr"]
         
     iterator = MockIterator(data_loader, epoch)
     total_epochs = 25 # Must match the number in faster_rcnn_trainer.py
+
+    # Apply learning rate warmup for the first 500 iterations
+    if epoch == 0:
+        warmup_factor = 1. / 1000
+        warmup_iters = min(1000, len(data_loader) - 1)
+        lr_scheduler = warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)
 
     for images, targets in data_loader:
         # Move images and targets to the GPU
@@ -40,13 +54,24 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())
         
-        loss_value = losses.item()
+        # reduce losses over all GPUs for logging purposes
+        loss_dict_reduced = reduce_dict(loss_dict)
+        losses_reduced = sum(loss for loss in loss_dict_reduced.values())
+        
+        loss_value = losses_reduced.item()
         iterator.loss_hist.update(loss_value)
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+            sys.exit(1)
 
         # Backpropagation step
         optimizer.zero_grad()
         losses.backward()
         optimizer.step()
+        
+        if epoch == 0 and iterator.current < warmup_iters:
+            lr_scheduler.step()
         
         iterator.current += 1
         
@@ -58,24 +83,46 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
     sys.stdout.write(f"\rEpoch: [{epoch+1}/{total_epochs}], Iteration: {iterator.current}/{iterator.total}, Loss: {iterator.loss_hist.avg:.4f}")
     print("\nTraining complete for epoch.")
 
-
 @torch.no_grad()
 def evaluate(model, data_loader, device):
     """
-    Runs a minimal validation check. Full mAP calculation is disabled as it requires 
-    the external pycocotools library which is often not pre-installed.
+    Standard COCO evaluation loop, required to run mAP calculation.
     """
+    n_threads = torch.get_num_threads()
+    # torch.set_num_threads(1)
+    cpu_device = torch.device("cpu")
     model.eval()
-    
-    print("Running minimal validation check...")
-    
-    for i, (images, targets) in enumerate(data_loader):
+    metric_logger = MetricLogger(delimiter="  ")
+    header = 'Test:'
+
+    coco = get_coco_api_from_dataset(data_loader.dataset)
+    iou_types = ["bbox"]
+    coco_evaluator = CocoEvaluator(coco, iou_types)
+
+    for images, targets in metric_logger.log_every(data_loader, 100, header):
         images = list(img.to(device) for img in images)
         
-        # In evaluation, the model returns predictions (boxes, labels, scores)
-        model(images)
-        
-        if i >= 10: # Check 10 batches for stability
-            break
-        
-    print("Validation check passed. (Full mAP calculation skipped.)")
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        model_time = time.time()
+        outputs = model(images)
+
+        outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
+        model_time = time.time() - model_time
+
+        res = {target["image_id"].item(): output for target, output in zip(targets, outputs)}
+        evaluator_time = time.time()
+        coco_evaluator.update(res)
+        evaluator_time = time.time() - evaluator_time
+        metric_logger.update(model_time=model_time, evaluator_time=evaluator_time)
+
+    # Gather the results from all processes
+    metric_logger.synchronize_between_processes()
+    print("Averaged stats:", metric_logger)
+    coco_evaluator.synchronize_between_processes()
+
+    # Accumulate predictions from all images
+    coco_evaluator.accumulate()
+    coco_evaluator.summarize()
+    # torch.set_num_threads(n_threads)
+    return coco_evaluator
