@@ -5,6 +5,7 @@ import torch.distributed as dist
 from pycocotools.cocoeval import COCOeval
 from collections import defaultdict
 import numpy as np
+import json # <--- FIX 1: ADDED MISSING IMPORT
 
 def to_list(x):
     """Converts a tensor or array to a Python list."""
@@ -28,35 +29,30 @@ class CocoEvaluator:
             self.coco_eval[iou_type] = COCOeval(self.coco_gt, iouType=iou_type)
 
         self.img_ids = []
-        self.eval_imgs = defaultdict(list)
+        self.eval_imgs = defaultdict(list) # This will be a list of lists
 
     def update(self, predictions):
         img_ids = list(predictions.keys())
         self.img_ids.extend(img_ids)
         for iou_type in self.iou_types:
             results = self.prepare_for_coco_eval(predictions, iou_type)
-            # Use append for list of lists
+            # Append the list of results for this batch
             self.eval_imgs[iou_type].append(results)
 
     def synchronize_between_processes(self):
-        for iou_type in self.iou_types:
-            # Concatenate all results from all updates
-            self.eval_imgs[iou_type] = np.concatenate(self.eval_imgs[iou_type], 0)
+        # --- FIX 2: REMOVED THE CORRUPTING np.concatenate LINE ---
+        # for iou_type in self.iou_types:
+            # self.eval_imgs[iou_type] = np.concatenate(self.eval_imgs[iou_type], 0) # <--- THIS LINE WAS THE BUG
         
-        # This function loads the detection results (cocoDt) into the evaluator
+        # This function will now receive a clean list of lists
         create_and_update_coco_eval(self.coco_eval, self.img_ids, self.eval_imgs)
 
     def accumulate(self):
         for coco_eval in self.coco_eval.values():
-            # --- THIS IS THE FIX ---
-            # We must call .evaluate() before .accumulate()
-            # .evaluate() populates the self.evalImgs dict
-            # .accumulate() uses that dict to calculate stats
             print("Running COCOeval.evaluate()...")
             coco_eval.evaluate()
             print("Running COCOeval.accumulate()...")
             coco_eval.accumulate()
-            # ----------------------
 
     def summarize(self):
         for iou_type, coco_eval in self.coco_eval.items():
@@ -79,15 +75,14 @@ class CocoEvaluator:
             if iou_type == "bbox":
                 for box, score, label in zip(boxes, scores, labels):
                     # COCO needs [x_min, y_min, width, height] format
-                    # Ensure box coordinates are valid floats
                     box = [float(b) for b in box]
                     box[2] = box[2] - box[0] # width
                     box[3] = box[3] - box[1] # height
                     coco_results.append({
                         "image_id": original_id,
-                        "category_id": int(label), # Ensure category_id is int
+                        "category_id": int(label), 
                         "bbox": box,
-                        "score": float(score), # Ensure score is float
+                        "score": float(score), 
                     })
         return coco_results
 
@@ -97,7 +92,7 @@ def create_and_update_coco_eval(coco_eval, img_ids, eval_imgs):
     """
     for iou_type, coco_evaluator in coco_eval.items():
         if iou_type == "bbox":
-            # Ensure results are in the correct list format
+            # This line correctly flattens the list of lists
             result_json = [item for sublist in eval_imgs[iou_type] for item in sublist]
             
             try:
@@ -107,7 +102,8 @@ def create_and_update_coco_eval(coco_eval, img_ids, eval_imgs):
             except Exception as e:
                 print(f"Error loading results into COCO API: {e}")
                 print("Dumping first 5 detection results for debugging:")
-                print(json.dumps(result_json[:5], indent=2))
+                # This print statement will now work
+                print(json.dumps(result_json[:5], indent=2)) 
                 return
 
             # Set the image IDs to evaluate
