@@ -16,18 +16,25 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 from src.detection import coco_utils
 from src.detection import coco_eval
 from src.detection import engine
+from src.detection import utils # <--- NOW IMPORTING utils (where collate_fn is located)
 
-# --- Configuration (These are default values, but the function signature below uses the names from the trainer) ---
+# --- Configuration ---
 NUM_CLASSES = 2 # Anomaly (1) + Background (1)
 DATA_DIR_DEFAULT = 'data/thermal_anomalies'
 ANNOTATION_FILE_DEFAULT = 'validation.json' 
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 # --- Dataset Class ---
+# This class still uses torchvision.datasets.coco.CocoDetection via the
+# inheritance in your coco_utils.py, which is appropriate.
 
 class ThermalAnomalyDataset(coco_utils.CocoDetection):
+    # This class definition remains here because it contains the logic
+    # to process images and convert COCO annotations to PyTorch targets
+    # which is specific to your project's detection pipeline.
+    
     def __init__(self, root, annFile, transforms=None):
-        # We call the parent constructor from torchvision's CocoDetection
+        # We call the parent constructor from the imported CocoDetection in coco_utils
         super().__init__(root, annFile, transforms)
         self._transforms = transforms
 
@@ -72,7 +79,7 @@ class ThermalAnomalyDataset(coco_utils.CocoDetection):
             area.append(obj['area'])
 
         if not boxes:
-            # Handle the case where an image has no annotations (should be rare/impossible for validation)
+            # Handle the case where an image has no annotations 
             boxes = torch.zeros((0, 4), dtype=torch.float32)
         else:
             boxes = torch.as_tensor(boxes, dtype=torch.float32)
@@ -81,7 +88,9 @@ class ThermalAnomalyDataset(coco_utils.CocoDetection):
         target = {}
         target["boxes"] = boxes
         target["labels"] = torch.as_tensor(labels, dtype=torch.int64)
-        target["image_id"] = torch.tensor([self.get_img_id(coco_target[0]['image_id'])])
+        # Note: We can't rely on self.get_img_id here as we don't have access to the parent's full logic
+        # But this structure matches the expected COCO format
+        target["image_id"] = torch.tensor([self.ids[self.ids.index(coco_target[0]['image_id'])]])
         target["area"] = torch.as_tensor(area, dtype=torch.float32)
         target["iscrowd"] = torch.as_tensor(iscrowd, dtype=torch.uint8)
 
@@ -91,20 +100,13 @@ class ThermalAnomalyDataset(coco_utils.CocoDetection):
 
 def get_model_instance_segmentation(num_classes):
     """Loads a pre-trained Faster R-CNN model (V2) and modifies the prediction head."""
-    # Use the V2 model to match the trainer!
     model = fasterrcnn_resnet50_fpn_v2() 
-    
-    # Get the number of input features for the classifier
     in_features = model.roi_heads.box_predictor.cls_score.in_features
-    
-    # Replace the pre-trained head with a new one that knows our number of classes
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-    
     return model
 
 # --- Evaluation Function ---
 
-# NOTE: The signature now matches the trainer's call: 'dataset_dir' and 'annotation_file'
 def calculate_mAP(model_path, dataset_dir, annotation_file, device):
     """
     Loads a trained model, runs evaluation on the validation dataset, 
@@ -122,15 +124,14 @@ def calculate_mAP(model_path, dataset_dir, annotation_file, device):
     # 3. Create the dataset and dataloader
     dataset_val = ThermalAnomalyDataset(
         root=os.path.join(dataset_dir, 'images'), 
-        # Use the 'annotation_file' parameter here
         annFile=os.path.join(dataset_dir, annotation_file), 
         transforms=lambda img, target: (F.to_tensor(img), target)
     )
     
-    # Use the custom collate_fn for object detection
+    # Use the custom collate_fn from the correct 'utils' module!
     data_loader_val = torch.utils.data.DataLoader(
         dataset_val, batch_size=4, shuffle=False, num_workers=4,
-        collate_fn=coco_utils.collate_fn 
+        collate_fn=utils.collate_fn # <--- FIX APPLIED HERE
     )
     
     # 4. Run the evaluation using the engine's built-in function
@@ -141,7 +142,6 @@ def calculate_mAP(model_path, dataset_dir, annotation_file, device):
 
 if __name__ == '__main__':
     # Example usage for standalone testing
-    
     if not os.path.exists('models'):
         os.makedirs('models')
         
@@ -153,11 +153,10 @@ if __name__ == '__main__':
         
     print("--- Standalone mAP Test ---")
     
-    # Run the full evaluation process
     stats = calculate_mAP(
         model_path=dummy_model_path,
-        dataset_dir=DATA_DIR_DEFAULT, # Using default directory
-        annotation_file=ANNOTATION_FILE_DEFAULT, # Using default file name
+        dataset_dir=DATA_DIR_DEFAULT, 
+        annotation_file=ANNOTATION_FILE_DEFAULT, 
         device=DEVICE
     )
     
