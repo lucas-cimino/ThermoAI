@@ -6,13 +6,9 @@ from collections import defaultdict, deque
 
 # --- Data Loading Utility ---
 
-# This function is crucial for Object Detection DataLoaders
-# It correctly handles batches where images and targets have variable sizes.
 def collate_fn(batch):
     """
     Collate function to handle variable sized inputs in a batch.
-    It takes a list of (img, target) tuples and returns a tuple of lists 
-    ([img1, img2, ...], [target1, target2, ...]).
     """
     return tuple(zip(*batch))
 
@@ -21,10 +17,8 @@ def collate_fn(batch):
 
 def reduce_dict(input_dict):
     """
-    All-reduce the dictionary of tensors across all participating processes.
-    This is necessary for distributed training, but harmless for single-GPU training.
+    All-reduce the dictionary of tensors. Harmless for single-GPU.
     """
-    # Assuming single process for now, so no actual reduction is needed.
     return input_dict
 
 class SmoothedValue(object):
@@ -44,16 +38,17 @@ class SmoothedValue(object):
         self.total += value * n
 
     def synchronize_between_processes(self):
-        # Placeholder for distributed synchronization
-        pass
+        pass # Not needed for single GPU
 
     @property
     def median(self):
-        return torch.median(torch.tensor(list(self.deque))).item()
+        d = torch.tensor(list(self.deque))
+        return d.median().item()
 
     @property
     def avg(self):
-        return self.total / self.count
+        d = torch.tensor(list(self.deque), dtype=torch.float32)
+        return d.mean().item()
 
     @property
     def global_avg(self):
@@ -113,19 +108,59 @@ class MetricLogger(object):
         end = time.time()
         iter_time = SmoothedValue(fmt='{avg:.4f}')
         data_time = SmoothedValue(fmt='{avg:.4f}')
+        space_fmt = ':' + str(len(str(len(iterable)))) + 'd'
         
+        # --- FIX: LOGGING IS NOW RE-ENABLED ---
+        if torch.cuda.is_available():
+            log_msg = self.delimiter.join([
+                header,
+                '[{0' + space_fmt + '}/{1}]',
+                'eta: {eta}',
+                '{meters}',
+                'time: {time}',
+                'data: {data}',
+                'max mem: {memory}MB'
+            ])
+        else:
+            log_msg = self.delimiter.join([
+                header,
+                '[{0' + space_fmt + '}/{1}]',
+                'eta: {eta}',
+                '{meters}',
+                'time: {time}',
+                'data: {data}'
+            ])
+        # ------------------------------------
+            
         MB = 1024.0 * 1024.0
         for obj in iterable:
             data_time.update(time.time() - end)
             yield obj
             iter_time.update(time.time() - end)
             
+            # --- FIX: LOGGING IS NOW RE-ENABLED ---
+            if i % print_freq == 0 or i == len(iterable) - 1:
+                eta_seconds = iter_time.global_avg * (len(iterable) - i)
+                eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
+                if torch.cuda.is_available():
+                    print(log_msg.format(
+                        i, len(iterable), eta=eta_string,
+                        meters=str(self),
+                        time=str(iter_time), data=str(data_time),
+                        memory=int(torch.cuda.max_memory_allocated() / MB)))
+                else:
+                    print(log_msg.format(
+                        i, len(iterable), eta=eta_string,
+                        meters=str(self),
+                        time=str(iter_time), data=str(data_time)))
+            # ------------------------------------
             i += 1
             end = time.time()
         
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-        # This function primarily handles time measurement during evaluation
+        print('{} Total time: {} ({:.4f} s / it)'.format(
+            header, total_time_str, total_time / len(iterable)))
 
 # --- Learning Rate Scheduler Utility ---
 

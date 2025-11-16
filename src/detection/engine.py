@@ -1,16 +1,17 @@
 import torch
 import sys
 import math
-import time  # <--- THIS IS THE FIX
+import time 
 from coco_utils import get_coco_api_from_dataset
 from coco_eval import CocoEvaluator
+# Import the full utils, not just individual functions
 from utils import MetricLogger, SmoothedValue, reduce_dict, warmup_lr_scheduler
 
 def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
     model.train()
     metric_logger = MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = f'Epoch: [{epoch + 1}]' # Use epoch + 1 for 1-based indexing in logs
+    header = f'Epoch: [{epoch + 1}]' 
 
     # Use a fixed total_epochs for display, matching the trainer
     total_epochs = 25 
@@ -55,9 +56,9 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
         # Update the logger
         metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-
-    # Final print for the epoch
-    print(f"\rEpoch: [{epoch+1}/{total_epochs}], Iteration: {len(data_loader)}/{len(data_loader)}, Loss: {metric_logger.loss.global_avg:.4f}")
+    
+    # Final print for the epoch (now handled by log_every)
+    print(f"\nTraining complete for epoch {epoch + 1}.")
 
 
 @torch.no_grad()
@@ -66,7 +67,7 @@ def evaluate(model, data_loader, device):
     Standard COCO evaluation loop, required to run mAP calculation.
     """
     n_threads = torch.get_num_threads()
-    # torch.set_num_threads(1) # This can cause issues, keep it commented
+    # torch.set_num_threads(1) 
     cpu_device = torch.device("cpu")
     model.eval()
     metric_logger = MetricLogger(delimiter="  ")
@@ -104,5 +105,8 @@ def evaluate(model, data_loader, device):
     # Accumulate predictions from all images
     coco_evaluator.accumulate()
     coco_evaluator.summarize()
-    # torch.set_num_threads(n_threads)
-    return coco_evaluator
+    
+    # --- THIS IS THE FIX ---
+    # Return the actual results object, not the wrapper
+    return coco_evaluator.coco_eval['bbox']
+    # ----------------------
