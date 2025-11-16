@@ -10,7 +10,6 @@ from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.transforms import functional as F
 
 # Add the directory containing the project modules to the path
-# NOTE: This ensures imports like 'src.detection.utils' work correctly
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 # Import local utility files
@@ -20,10 +19,8 @@ from src.detection import engine
 from src.detection import utils 
 
 # --- Configuration ---
-NUM_CLASSES = 2 # Anomaly (1) + Background (1)
-# DATA_DIR_DEFAULT is set to 'data/thermal_anomalies' but should probably be 'dataset'
-# for this project's structure. Let's rely on parameters for data path.
-ANNOTATION_FILE_DEFAULT = 'val_split.json' # Renamed for clarity, since it's the specific filename
+NUM_CLASSES = 2 
+ANNOTATION_FILE_DEFAULT = 'val_split.json' 
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 # --- Dataset Class ---
@@ -31,7 +28,6 @@ class ThermalAnomalyDataset(coco_utils.CocoDetection):
     def __init__(self, root, annFile, transforms=None):
         super().__init__(img_folder=root, ann_file=annFile, transforms=transforms)
         self._transforms = transforms
-
     pass
 
 # --- Model Initialization ---
@@ -57,23 +53,20 @@ def calculate_mAP(model_path, dataset_dir, annotation_file, device):
     model.to(device)
     
     # 2. Load the trained state dictionary
-    # The FutureWarning is expected when loading PyTorch models saved without weights_only=True
     model.load_state_dict(torch.load(model_path, map_location=device))
     
     # 3. Create the dataset and dataloader
     
-    # --- PATH CORRECTION APPLIED HERE ---
-    # The image root is 'dataset/train' and annotations are in 'dataset/data_split'
-    img_root_path = os.path.join(dataset_dir, 'train') # Assuming images are in 'dataset/train' based on common structure
+    # FIX: Image root is assumed to be in the 'train' folder relative to the base dataset_dir
+    img_root_path = os.path.join(dataset_dir, 'train') 
     ann_file_path = os.path.join(dataset_dir, 'data_split', annotation_file)
     
     print(f"Loading validation annotations from: {ann_file_path}")
-    print(f"Loading validation images from: {img_root_path}")
+    print(f"Loading validation images from: {img_root_path}") # This is the key path we are troubleshooting
     
     dataset_val = ThermalAnomalyDataset(
         root=img_root_path, 
         annFile=ann_file_path, 
-        # Apply the transforms that simply convert the PIL image to a tensor
         transforms=lambda img, target: (F.to_tensor(img), target)
     )
     
@@ -86,7 +79,6 @@ def calculate_mAP(model_path, dataset_dir, annotation_file, device):
     # 4. Run the evaluation using the engine's built-in function
     print("Starting validation...")
     
-    # Set model to evaluation mode
     model.eval() 
     
     coco_stats = engine.evaluate(model, data_loader_val, device=device)
@@ -99,7 +91,7 @@ if __name__ == '__main__':
         os.makedirs('models')
         
     dummy_model_path = './models/faster_rcnn_final_epoch_1.pth'
-    DATA_DIR_DEFAULT = 'dataset' # Corrected default for standalone test
+    DATA_DIR_DEFAULT = 'dataset'
 
     if not os.path.exists(dummy_model_path):
         print(f"Warning: Dummy model file '{dummy_model_path}' not found. Please run the trainer first to generate it.")
