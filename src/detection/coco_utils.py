@@ -3,33 +3,31 @@ import os
 import json
 import torch
 from torchvision.datasets import VisionDataset
+from pycocotools.coco import COCO # <--- IMPORT THE ACTUAL COCO API
 
 # This class handles loading COCO JSON and images, and converting annotations to tensors.
 class CocoDetection(VisionDataset):
     def __init__(self, img_folder, ann_file, transforms=None):
-        # We pass None for root as we handle img_folder manually based on our project structure
         super().__init__(None, transforms=transforms) 
         self.img_folder = img_folder
+        self.transforms = transforms
         
-        # Load the JSON file
-        with open(ann_file, 'r') as f:
-            coco = json.load(f)
-        
-        self.ids = [img['id'] for img in coco['images']]
-        self.coco = coco
-        
-        # Create map from image ID to image info and annotations
-        self.img_id_to_img = {img['id']: img for img in coco['images']}
-        self.img_id_to_anns = {img_id: [] for img_id in self.ids}
-        for ann in coco['annotations']:
-            if ann['image_id'] in self.img_id_to_anns:
-                self.img_id_to_anns[ann['image_id']].append(ann)
+        # --- CRITICAL FIX ---
+        # Initialize the COCO API object from the annotation file
+        # self.coco is now a COCO object, not a dict
+        self.coco = COCO(ann_file) 
+        # Get sorted image IDs using the API method
+        self.ids = sorted(self.coco.getImgIds()) 
+        # --------------------
 
     def __getitem__(self, idx):
+        # Use the COCO API to get image and annotation info
         img_id = self.ids[idx]
-        img_info = self.img_id_to_img[img_id]
-        ann_info = self.img_id_to_anns[img_id]
+        ann_ids = self.coco.getAnnIds(imgIds=img_id)
+        ann_info = self.coco.loadAnns(ann_ids)
         
+        # Get image file name
+        img_info = self.coco.loadImgs(img_id)[0]
         file_name = img_info['file_name']
         
         # Load the image and convert to RGB
@@ -37,24 +35,36 @@ class CocoDetection(VisionDataset):
         
         boxes = []
         labels = []
+        areas = []
+        iscrowd = []
         
         for ann in ann_info:
             # COCO format: [x, y, width, height]
             x, y, w, h = ann['bbox']
-            # Convert to PyTorch format: [x_min, y_min, x_max, y_max]
-            boxes.append([x, y, x + w, y + h]) 
-            labels.append(ann['category_id'])
+            
+            # Check for valid bounding box (width and height > 0)
+            if w > 0 and h > 0:
+                # Convert to PyTorch format: [x_min, y_min, x_max, y_max]
+                boxes.append([x, y, x + w, y + h]) 
+                labels.append(ann['category_id'])
+                areas.append(ann['area'])
+                iscrowd.append(ann['iscrowd'])
         
+        # Convert to tensors
         boxes = torch.as_tensor(boxes, dtype=torch.float32)
         labels = torch.as_tensor(labels, dtype=torch.int64)
+        areas = torch.as_tensor(areas, dtype=torch.float32)
+        iscrowd = torch.as_tensor(iscrowd, dtype=torch.int64)
 
         target = {}
         target["boxes"] = boxes
         target["labels"] = labels
         target["image_id"] = torch.tensor([img_id])
+        target["area"] = areas
+        target["iscrowd"] = iscrowd
 
         if self.transforms is not None:
-            # Apply the transforms defined in faster_rcnn_trainer.py
+            # Apply the transforms
             img, target = self.transforms(img, target)
 
         return img, target
@@ -62,21 +72,10 @@ class CocoDetection(VisionDataset):
     def __len__(self):
         return len(self.ids)
     
-    # Required for the evaluation stub in engine.py
-    def get_coco_api_from_dataset(self):
-        return self.coco
-    
-# --- New Function for Evaluation ---
+# --- This function is now correct ---
+# It will return the COCO API object stored in dataset.coco
 def get_coco_api_from_dataset(dataset):
     """
     Retrieves the COCO API object from a dataset, used for evaluation.
-    This is required by the TorchVision evaluation engine.
     """
-    for idx in range(len(dataset)):
-        # Check if the target has the required 'image_id' field for COCO evaluation
-        img, target = dataset[idx]
-        if target is not None and "image_id" in target:
-            # We assume the dataset object has a 'coco' attribute (pycocotools.coco.COCO)
-            return dataset.coco
     return dataset.coco
-
