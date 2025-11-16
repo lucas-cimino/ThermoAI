@@ -65,3 +65,18 @@ class CocoDetection(VisionDataset):
     # Required for the evaluation stub in engine.py
     def get_coco_api_from_dataset(self):
         return self.coco
+    
+# --- New Function for Evaluation ---
+def get_coco_api_from_dataset(dataset):
+    """
+    Retrieves the COCO API object from a dataset, used for evaluation.
+    This is required by the TorchVision evaluation engine.
+    """
+    for idx in range(len(dataset)):
+        # Check if the target has the required 'image_id' field for COCO evaluation
+        img, target = dataset[idx]
+        if target is not None and "image_id" in target:
+            # We assume the dataset object has a 'coco' attribute (pycocotools.coco.COCO)
+            return dataset.coco
+    return dataset.coco
+
