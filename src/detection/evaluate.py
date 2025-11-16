@@ -10,13 +10,14 @@ from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.transforms import functional as F
 
 # Add the directory containing the project modules to the path
+# NOTE: This ensures imports like 'src.detection.utils' work correctly
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 # Import local utility files
 from src.detection import coco_utils
 from src.detection import coco_eval
 from src.detection import engine
-from src.detection import utils # <--- NOW IMPORTING utils (where collate_fn is located)
+from src.detection import utils 
 
 # --- Configuration ---
 NUM_CLASSES = 2 # Anomaly (1) + Background (1)
@@ -25,76 +26,23 @@ ANNOTATION_FILE_DEFAULT = 'validation.json'
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 # --- Dataset Class ---
-# This class still uses torchvision.datasets.coco.CocoDetection via the
-# inheritance in your coco_utils.py, which is appropriate.
+# We inherit directly from the custom CocoDetection class in coco_utils.py
+# and rely on its __getitem__ for image and target loading, as it performs
+# the correct COCO-to-PyTorch conversion for us.
 
 class ThermalAnomalyDataset(coco_utils.CocoDetection):
-    # This class definition remains here because it contains the logic
-    # to process images and convert COCO annotations to PyTorch targets
-    # which is specific to your project's detection pipeline.
-    
+    # NOTE: The __init__ of the base class (in coco_utils.py) expects 
+    # (img_folder, ann_file, transforms). We must match this.
     def __init__(self, root, annFile, transforms=None):
-        # We call the parent constructor from the imported CocoDetection in coco_utils
-        super().__init__(root, annFile, transforms)
+        # The 'root' passed here is actually the path to the 'images' folder.
+        super().__init__(img_folder=root, ann_file=annFile, transforms=transforms)
         self._transforms = transforms
 
-    def __getitem__(self, idx):
-        # Get the original image and target (annotation)
-        img_id = self.ids[idx]
-        target = self.coco.loadAnns(self.coco.getAnnIds(img_id))
-        path = self.coco.loadImgs(img_id)[0]['file_name']
-        
-        img = Image.open(os.path.join(self.root, path)).convert('RGB')
-        
-        # Convert COCO format annotations to the expected PyTorch Detection format
-        target = self._convert_to_pytorch_target(target, img.size)
-
-        if self.transforms is not None:
-            img, target = self.transforms(img, target)
-        
-        return img, target
-
-    def _convert_to_pytorch_target(self, coco_target, image_size):
-        w, h = image_size
-        
-        # Process annotations for one image
-        boxes = []
-        labels = []
-        iscrowd = []
-        area = []
-
-        for obj in coco_target:
-            # COCO boxes are [x, y, w, h] - convert to [x_min, y_min, x_max, y_max]
-            x_min = obj['bbox'][0]
-            y_min = obj['bbox'][1]
-            x_max = x_min + obj['bbox'][2]
-            y_max = y_min + obj['bbox'][3]
-            
-            boxes.append([x_min, y_min, x_max, y_max])
-            
-            # The category ID is 1 for 'anomaly' (since we use 2 classes: 0=background, 1=anomaly)
-            labels.append(1) 
-            
-            iscrowd.append(obj['iscrowd'])
-            area.append(obj['area'])
-
-        if not boxes:
-            # Handle the case where an image has no annotations 
-            boxes = torch.zeros((0, 4), dtype=torch.float32)
-        else:
-            boxes = torch.as_tensor(boxes, dtype=torch.float32)
-        
-        # Create the final target dictionary
-        target = {}
-        target["boxes"] = boxes
-        target["labels"] = torch.as_tensor(labels, dtype=torch.int64)
-        # Note: We can't rely on self.get_img_id here as we don't have access to the parent's full logic
-        # But this structure matches the expected COCO format
-        target["image_id"] = torch.tensor([self.ids[self.ids.index(coco_target[0]['image_id'])]])
-        target["area"] = torch.as_tensor(area, dtype=torch.float32)
-        target["iscrowd"] = torch.as_tensor(iscrowd, dtype=torch.uint8)
-
-        return target
+    # We do NOT define __getitem__ or _convert_to_pytorch_target here, 
+    # as the inherited methods from coco_utils.CocoDetection already
+    # handle the image loading and annotation conversion into the
+    # expected PyTorch target dictionary format.
+    pass
 
 # --- Model Initialization ---
 
@@ -124,18 +72,23 @@ def calculate_mAP(model_path, dataset_dir, annotation_file, device):
     # 3. Create the dataset and dataloader
     dataset_val = ThermalAnomalyDataset(
         root=os.path.join(dataset_dir, 'images'), 
-        annFile=os.path.join(dataset_dir, annotation_file), 
+        annFile=os.path.join(dataset_dir, 'annotations', annotation_file), 
+        # Apply the transforms that simply convert the PIL image to a tensor
         transforms=lambda img, target: (F.to_tensor(img), target)
     )
     
-    # Use the custom collate_fn from the correct 'utils' module!
+    # Use the custom collate_fn from the correct 'utils' module
     data_loader_val = torch.utils.data.DataLoader(
         dataset_val, batch_size=4, shuffle=False, num_workers=4,
-        collate_fn=utils.collate_fn # <--- FIX APPLIED HERE
+        collate_fn=utils.collate_fn 
     )
     
     # 4. Run the evaluation using the engine's built-in function
     print("Starting validation...")
+    
+    # Set model to evaluation mode
+    model.eval() 
+    
     coco_stats = engine.evaluate(model, data_loader_val, device=device)
     
     return coco_stats
