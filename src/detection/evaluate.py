@@ -5,7 +5,7 @@ import sys
 from PIL import Image
 
 # Import necessary dependencies from torchvision
-from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2 # <-- CRUCIAL V2 IMPORT
+from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2 
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.transforms import functional as F
 
@@ -92,7 +92,6 @@ class ThermalAnomalyDataset(coco_utils.CocoDetection):
 def get_model_instance_segmentation(num_classes):
     """Loads a pre-trained Faster R-CNN model (V2) and modifies the prediction head."""
     # Use the V2 model to match the trainer!
-    # Load V2 architecture without weights first, as we are loading custom weights later
     model = fasterrcnn_resnet50_fpn_v2() 
     
     # Get the number of input features for the classifier
@@ -105,7 +104,8 @@ def get_model_instance_segmentation(num_classes):
 
 # --- Evaluation Function ---
 
-def calculate_mAP(model_path, data_dir, ann_file, device):
+# NOTE: Changing 'data_dir' to 'dataset_dir' to match the keyword argument used in faster_rcnn_trainer.py
+def calculate_mAP(model_path, dataset_dir, ann_file, device):
     """
     Loads a trained model, runs evaluation on the validation dataset, 
     and returns the COCO mAP statistics.
@@ -117,14 +117,13 @@ def calculate_mAP(model_path, data_dir, ann_file, device):
     model.to(device)
     
     # 2. Load the trained state dictionary
-    # The fix ensures this architecture matches the saved file, resolving the RuntimeError
     model.load_state_dict(torch.load(model_path, map_location=device))
     
     # 3. Create the dataset and dataloader
     dataset_val = ThermalAnomalyDataset(
-        root=os.path.join(data_dir, 'images'), 
-        annFile=os.path.join(data_dir, 'annotations', ann_file), 
-        # No transforms needed for validation other thanToTensor
+        # Use dataset_dir instead of data_dir
+        root=os.path.join(dataset_dir, 'images'), 
+        annFile=os.path.join(dataset_dir, 'annotations', ann_file), 
         transforms=lambda img, target: (F.to_tensor(img), target)
     )
     
@@ -147,13 +146,11 @@ if __name__ == '__main__':
     if not os.path.exists('models'):
         os.makedirs('models')
         
-    # Create a dummy model file (if you want to test the full path, 
-    # you would need to run the trainer once to generate the file)
+    # Define a path for a model to test loading
     dummy_model_path = './models/faster_rcnn_final_epoch_1.pth'
 
     if not os.path.exists(dummy_model_path):
-        print(f"Warning: Dummy model file '{dummy_model_path}' not found. Please run the trainer first.")
-        # We can't run the evaluation without a model, so we exit if not testing from trainer
+        print(f"Warning: Dummy model file '{dummy_model_path}' not found. Please run the trainer first to generate it.")
         sys.exit(0) 
         
     print("--- Standalone mAP Test ---")
@@ -161,7 +158,7 @@ if __name__ == '__main__':
     # Run the full evaluation process
     stats = calculate_mAP(
         model_path=dummy_model_path,
-        data_dir=DATA_DIR,
+        dataset_dir=DATA_DIR, # Using DATA_DIR defined at the top
         ann_file=ANNOTATION_FILE,
         device=DEVICE
     )
