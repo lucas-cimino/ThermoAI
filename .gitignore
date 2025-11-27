@@ -1,0 +1,4 @@
+data/train/images/
+data/test/images/
+models/
+*.pth

@@ -4,7 +4,6 @@ import math
 import time 
 from coco_utils import get_coco_api_from_dataset
 from coco_eval import CocoEvaluator
-# Import the full utils, not just individual functions
 from utils import MetricLogger, SmoothedValue, reduce_dict, warmup_lr_scheduler
 
 def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
@@ -48,10 +47,7 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
         metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
     
-    # --- THIS IS THE NEW LINE ---
-    # Return the logger so the main script can get the final average loss
     return metric_logger
-    # ----------------------------
 
 
 @torch.no_grad()
@@ -93,5 +89,4 @@ def evaluate(model, data_loader, device):
     coco_evaluator.accumulate()
     coco_evaluator.summarize()
     
-    # Return the actual results object
     return coco_evaluator.coco_eval['bbox']

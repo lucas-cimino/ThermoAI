@@ -4,7 +4,6 @@ import datetime
 import sys
 from collections import defaultdict, deque
 
-# --- Data Loading Utility ---
 
 def collate_fn(batch):
     """
@@ -13,7 +12,6 @@ def collate_fn(batch):
     return tuple(zip(*batch))
 
 
-# --- Logging and Distributed Utilities (Required for engine.py) ---
 
 def reduce_dict(input_dict):
     """
@@ -38,7 +36,7 @@ class SmoothedValue(object):
         self.total += value * n
 
     def synchronize_between_processes(self):
-        pass # Not needed for single GPU
+        pass
 
     @property
     def median(self):
@@ -110,7 +108,6 @@ class MetricLogger(object):
         data_time = SmoothedValue(fmt='{avg:.4f}')
         space_fmt = ':' + str(len(str(len(iterable)))) + 'd'
         
-        # --- FIX: LOGGING IS NOW RE-ENABLED ---
         if torch.cuda.is_available():
             log_msg = self.delimiter.join([
                 header,
@@ -130,7 +127,6 @@ class MetricLogger(object):
                 'time: {time}',
                 'data: {data}'
             ])
-        # ------------------------------------
             
         MB = 1024.0 * 1024.0
         for obj in iterable:
@@ -138,7 +134,6 @@ class MetricLogger(object):
             yield obj
             iter_time.update(time.time() - end)
             
-            # --- FIX: LOGGING IS NOW RE-ENABLED ---
             if i % print_freq == 0 or i == len(iterable) - 1:
                 eta_seconds = iter_time.global_avg * (len(iterable) - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
@@ -153,7 +148,6 @@ class MetricLogger(object):
                         i, len(iterable), eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
-            # ------------------------------------
             i += 1
             end = time.time()
         
@@ -161,8 +155,6 @@ class MetricLogger(object):
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print('{} Total time: {} ({:.4f} s / it)'.format(
             header, total_time_str, total_time / len(iterable)))
-
-# --- Learning Rate Scheduler Utility ---
 
 def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
     """

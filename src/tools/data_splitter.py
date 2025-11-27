@@ -1,70 +1,50 @@
 import json
 import os
 import random
+from pathlib import Path
 
-# --- Configuration ---
-# INPUT: Points to the specific location of the original JSON file
-INPUT_JSON_PATH = './dataset/train/train.json' 
-# OUTPUT: New split JSONs will be saved here
-OUTPUT_DIR = './dataset/data_split' 
-SPLIT_RATIO = 0.8  # 80% for training, 20% for validation
-RANDOM_SEED = 42   
-# ---------------------
-
-def split_coco_dataset(input_path, output_dir, ratio, seed):
-    """Reads a COCO JSON file, splits the images, and creates two new COCO JSON files."""
-    print(f"Starting data split with ratio {ratio}...")
-    
-    # 1. Load the original COCO file
-    try:
-        with open(input_path, 'r') as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        print(f"ERROR: Input file not found at {input_path}. Please check the path and ensure the file exists.")
-        return
-
-    # Ensure output directory exists
-    os.makedirs(output_dir, exist_ok=True)
+def split_data(input_json_path, output_dir, split_ratio=0.8, seed=42):
+    """Splits a COCO JSON into train and validation sets."""
     random.seed(seed)
+    
+    with open(input_json_path, 'r') as f:
+        data = json.load(f)
 
-    # 2. Extract and shuffle image IDs
     images = data['images']
-    image_ids = [img['id'] for img in images]
-    random.shuffle(image_ids)
+    annotations = data['annotations']
+    categories = data['categories']
+
+    # Shuffle images
+    random.shuffle(images)
     
-    # Determine split index
-    train_size = int(len(image_ids) * ratio)
-    train_ids = set(image_ids[:train_size])
-    val_ids = set(image_ids[train_size:])
+    split_idx = int(len(images) * split_ratio)
+    train_images = images[:split_idx]
+    val_images = images[split_idx:]
 
-    print(f"Total images: {len(image_ids)}")
-    print(f"Train images: {len(train_ids)} ({ratio*100}%)")
-    print(f"Validation images: {len(val_ids)} ({(1-ratio)*100}%)")
+    train_img_ids = {img['id'] for img in train_images}
+    val_img_ids = {img['id'] for img in val_images}
 
-    # 3. Filter annotations and images for each set
-    train_data = {'info': data.get('info', {}), 'licenses': data.get('licenses', []), 'categories': data['categories'], 'images': [], 'annotations': []}
-    val_data = {'info': data.get('info', {}), 'licenses': data.get('licenses', []), 'categories': data['categories'], 'images': [], 'annotations': []}
+    train_anns = [ann for ann in annotations if ann['image_id'] in train_img_ids]
+    val_anns = [ann for ann in annotations if ann['image_id'] in val_img_ids]
 
-    # Populate image lists
-    id_to_image = {img['id']: img for img in images}
-    train_data['images'] = [id_to_image[id] for id in train_ids]
-    val_data['images'] = [id_to_image[id] for id in val_ids]
+    train_data = {'images': train_images, 'annotations': train_anns, 'categories': categories}
+    val_data = {'images': val_images, 'annotations': val_anns, 'categories': categories}
 
-    # Populate annotation lists
-    for ann in data['annotations']:
-        if ann['image_id'] in train_ids:
-            train_data['annotations'].append(ann)
-        elif ann['image_id'] in val_ids:
-            val_data['annotations'].append(ann)
+    os.makedirs(output_dir, exist_ok=True)
     
-    # 4. Save the new JSON files
-    with open(os.path.join(output_dir, 'train_split.json'), 'w') as f:
+    train_out = os.path.join(output_dir, 'train_split.json')
+    val_out = os.path.join(output_dir, 'val_split.json')
+
+    with open(train_out, 'w') as f:
         json.dump(train_data, f)
-    print(f"Saved train data to {os.path.join(output_dir, 'train_split.json')}")
-
-    with open(os.path.join(output_dir, 'val_split.json'), 'w') as f:
+    with open(val_out, 'w') as f:
         json.dump(val_data, f)
-    print(f"Saved validation data to {os.path.join(output_dir, 'val_split.json')}")
 
-if __name__ == '__main__':
-    split_coco_dataset(INPUT_JSON_PATH, OUTPUT_DIR, SPLIT_RATIO, RANDOM_SEED)
+    print(f"Split complete. Train: {len(train_images)}, Val: {len(val_images)}")
+
+if __name__ == "__main__":
+    BASE_DIR = Path(__file__).resolve().parents[2]
+    INPUT_FILE = BASE_DIR / 'data' / 'train' / 'train.json'
+    OUTPUT_DIR = BASE_DIR / 'data' / 'train'
+    
+    split_data(INPUT_FILE, OUTPUT_DIR)
