@@ -13,7 +13,8 @@ from torchvision.transforms import v2 as T
 BASE_DIR = Path(__file__).resolve().parents[2]
 sys.path.append(str(BASE_DIR))
 
-from src.detection.coco_utils import CocoDetection, collate_fn
+from src.detection.coco_utils import CocoDetection
+from src.detection.utils import collate_fn
 from src.detection.engine import train_one_epoch, evaluate
 
 # Config
